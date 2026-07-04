@@ -1,131 +1,191 @@
-from PIL import Image
-import easyocr
-import numpy as np
-import cv2
-import os
+from pathlib import Path
 import re
 
+import cv2
+import easyocr
+import numpy as np
+from PIL import Image
 
-class DivisorQuestoesOCR:
 
-    def __init__(self):
-        print("Carregando OCR...")
-        self.reader = easyocr.Reader(['pt'], gpu=False)
-        print("OCR carregado!")
+class DivisorQuestoes:
 
-    def encontrar_questoes(self, caminho_imagem):
+    def __init__(
+        self,
+        idioma="pt",
+        usar_gpu=False,
+        altura_janela=3500,
+        sobreposicao=500
+    ):
 
-        imagem = Image.open(caminho_imagem)
+        print("Inicializando OCR...")
 
-        largura, altura = imagem.size
+        self.reader = easyocr.Reader(
+            [idioma],
+            gpu=usar_gpu
+        )
 
-        janela = 3500
-        sobreposicao = 500
+        self.altura_janela = altura_janela
+        self.sobreposicao = sobreposicao
 
-        cortes = []
+        self.padrao = re.compile(
+            r"QUEST[ÃA]O\s*\d+",
+            re.IGNORECASE
+        )
 
-        y_inicio = 0
+        print("OCR pronto!")
 
-        while y_inicio < altura:
+    def executar_ocr(self, imagem):
 
-            y_fim = min(y_inicio + janela, altura)
+        imagem = np.array(imagem)
+        imagem = cv2.cvtColor(imagem, cv2.COLOR_RGB2BGR)
 
-            print(f"Analisando {y_inicio} -> {y_fim}")
+        return self.reader.readtext(
+            imagem,
+            detail=1,
+            paragraph=False
+        )
 
-            pedaco = imagem.crop((0, y_inicio, largura, y_fim))
+    def localizar_inicio_questoes(self, caminho):
 
-            # PIL -> NumPy
-            pedaco = np.array(pedaco)
-
-            # RGB -> BGR
-            pedaco = cv2.cvtColor(pedaco, cv2.COLOR_RGB2BGR)
-
-            resultado = self.reader.readtext(
-                pedaco,
-                detail=1,
-                paragraph=False
-            )
-
-            for item in resultado:
-
-                bbox = item[0]
-                texto = item[1].upper()
-
-                if re.search(r"QUEST[ÃA]O\s*\d+", texto):
-
-                    y_local = int(min(p[1] for p in bbox))
-
-                    y_real = y_inicio + y_local - 3
-
-                    cortes.append(y_real)
-
-                    print(f"{texto} encontrada em y={y_real}")
-
-            y_inicio += janela - sobreposicao
-
-        cortes = sorted(set(cortes))
-
-        return cortes
-
-    def cortar(self, caminho_imagem, pasta_saida):
-
-        os.makedirs(pasta_saida, exist_ok=True)
-
-        imagem = Image.open(caminho_imagem)
+        imagem = Image.open(caminho)
 
         largura, altura = imagem.size
 
-        cortes = self.encontrar_questoes(caminho_imagem)
-
-        if len(cortes) == 0:
-            print("Nenhuma questão encontrada.")
-            return
-
-        print(f"Foram encontradas {len(cortes)} questões.")
+        posicoes = []
 
         inicio = 0
+
+        while inicio < altura:
+
+            fim = min(
+                inicio + self.altura_janela,
+                altura
+            )
+
+            print(f"Analisando faixa {inicio} -> {fim}")
+
+            trecho = imagem.crop(
+                (
+                    0,
+                    inicio,
+                    largura,
+                    fim
+                )
+            )
+
+            resultados = self.executar_ocr(trecho)
+
+            for bbox, texto, _ in resultados:
+
+                texto = texto.upper()
+
+                if not self.padrao.search(texto):
+                    continue
+
+                y = min(p[1] for p in bbox)
+
+                posicao = inicio + int(y)
+
+                posicoes.append(posicao)
+
+                print(f"Encontrada: {texto}")
+
+            inicio += (
+                self.altura_janela
+                - self.sobreposicao
+            )
+
+        return sorted(set(posicoes))
+
+    def salvar_partes(
+        self,
+        imagem,
+        cortes,
+        pasta
+    ):
+
+        Path(pasta).mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
+        largura, altura = imagem.size
+
+        ultimo = 0
 
         contador = 1
 
         for corte in cortes:
 
-            if corte <= inicio + 100:
+            if corte - ultimo < 100:
                 continue
 
-            parte = imagem.crop((0, inicio, largura, corte))
-
-            parte.save(
-                os.path.join(
-                    pasta_saida,
-                    f"parte_{contador:03d}.png"
+            imagem.crop(
+                (
+                    0,
+                    ultimo,
+                    largura,
+                    corte
                 )
+            ).save(
+                Path(pasta) /
+                f"parte_{contador:03}.png"
             )
 
-            print(f"Salvo parte_{contador:03d}.png")
+            print(f"parte_{contador:03}.png")
+
+            ultimo = corte
 
             contador += 1
 
-            inicio = corte
-
-        parte = imagem.crop((0, inicio, largura, altura))
-
-        parte.save(
-            os.path.join(
-                pasta_saida,
-                f"parte_{contador:03d}.png"
+        imagem.crop(
+            (
+                0,
+                ultimo,
+                largura,
+                altura
             )
+        ).save(
+            Path(pasta) /
+            f"parte_{contador:03}.png"
         )
 
-        print(f"Salvo parte_{contador:03d}.png")
-        print(f"{contador} imagens geradas.")
+        print(f"parte_{contador:03}.png")
+
+        print(f"\nTotal: {contador} imagens.")
+
+    def cortar(self, caminho_imagem, pasta_saida):
+
+        imagem = Image.open(caminho_imagem)
+
+        cortes = self.localizar_inicio_questoes(
+            caminho_imagem
+        )
+
+        if not cortes:
+
+            print("Nenhuma questão encontrada.")
+
+            return
+
+        print(f"\n{len(cortes)} inícios encontrados.\n")
+
+        self.salvar_partes(
+            imagem,
+            cortes,
+            pasta_saida
+        )
 
 
 if __name__ == "__main__":
 
-    caminho = "inteiras/pagina_enem_24.png"
+    arquivo = "colunas_concatenadas_verticalmente.png"
 
-    pasta = "67-68"
+    pasta = "questoes_colunas"
 
-    divisor = DivisorQuestoesOCR()
+    divisor = DivisorQuestoes()
 
-    divisor.cortar(caminho, pasta)
+    divisor.cortar(
+        arquivo,
+        pasta
+    )
