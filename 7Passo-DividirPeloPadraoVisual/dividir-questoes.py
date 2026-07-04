@@ -122,9 +122,9 @@ class DivisorQuestoesOCR:
 
 if __name__ == "__main__":
 
-    caminho = "colunas_concatenadas_verticalmente.png"
+    caminho = "inteiras/pagina_enem_24.png"
 
-    pasta = "questoes_colunas"
+    pasta = "67-68"
 
     divisor = DivisorQuestoesOCR()
 
